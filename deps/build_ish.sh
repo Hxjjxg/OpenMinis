@@ -187,6 +187,9 @@ build_ish() {
 
     BUILD_DIR="$ISH_DIR/build-ios"
     CROSS_FILE="$BUILD_DIR/ios-cross.txt"
+    LLD_PATH=""
+    VDSO_CLANG=""
+    LLD_FLAG="-fuse-ld=lld"
 
     cd "$ISH_DIR"
 
@@ -211,6 +214,51 @@ build_ish() {
     else
         log_info "Meson already configured, reconfiguring..."
         meson configure "$BUILD_DIR" --buildtype="$MESON_BUILDTYPE"
+    fi
+
+    # iSH's ARM64 VDSO build hardcodes -fuse-ld=lld. On recent GitHub macOS
+    # runners, clang may reject that linker name. Detect a supported linker
+    # flag and patch build.ninja accordingly.
+    VDSO_CLANG=$(sed -n '/-fuse-ld=lld/{s/^[[:space:]]*command = //; s/[[:space:]].*$//; p; q;}' "$BUILD_DIR/build.ninja")
+    if [ -z "$VDSO_CLANG" ]; then
+        VDSO_CLANG=$(command -v clang || true)
+    fi
+
+    for lld_candidate in \
+        "/opt/homebrew/opt/llvm/bin/ld.lld" \
+        "/opt/homebrew/opt/llvm/bin/lld" \
+        "/opt/homebrew/opt/llvm/bin/ld64.lld" \
+        "/usr/local/opt/llvm/bin/ld.lld" \
+        "/usr/local/opt/llvm/bin/lld" \
+        "/usr/local/opt/llvm/bin/ld64.lld" \
+        "/opt/local/bin/ld.lld" \
+        "/opt/local/bin/lld" \
+        "/opt/local/bin/ld64.lld"; do
+        if [ -x "$lld_candidate" ]; then
+            LLD_PATH="$lld_candidate"
+            break
+        fi
+    done
+
+    if grep -q -- "-fuse-ld=lld" "$BUILD_DIR/build.ninja"; then
+        if [ -n "$VDSO_CLANG" ] && [ -x "$VDSO_CLANG" ] && ! "$VDSO_CLANG" -target aarch64-linux-gnu -fuse-ld=lld -### -x c /dev/null -c -o /dev/null >/dev/null 2>&1; then
+            if [ -n "$LLD_PATH" ] && "$VDSO_CLANG" -target aarch64-linux-gnu "--ld-path=$LLD_PATH" -### -x c /dev/null -c -o /dev/null >/dev/null 2>&1; then
+                LLD_FLAG="--ld-path=$LLD_PATH"
+            elif [ -n "$LLD_PATH" ] && "$VDSO_CLANG" -target aarch64-linux-gnu "-fuse-ld=$LLD_PATH" -### -x c /dev/null -c -o /dev/null >/dev/null 2>&1; then
+                LLD_FLAG="-fuse-ld=$LLD_PATH"
+            else
+                LLD_FLAG=""
+            fi
+        fi
+
+        if [ -n "$LLD_FLAG" ] && [ "$LLD_FLAG" != "-fuse-ld=lld" ]; then
+            log_info "Patching VDSO linker flag to use $LLD_FLAG"
+            sed -i.bak "s|-fuse-ld=lld|$LLD_FLAG|g" "$BUILD_DIR/build.ninja"
+        elif [ -z "$LLD_FLAG" ]; then
+            log_warning "No compatible clang linker override found; removing -fuse-ld=lld for VDSO build"
+            sed -i.bak "s|[[:space:]]-fuse-ld=lld||g" "$BUILD_DIR/build.ninja"
+        fi
+        rm -f "$BUILD_DIR/build.ninja.bak"
     fi
 
     # Build libraries
