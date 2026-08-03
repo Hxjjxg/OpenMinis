@@ -215,9 +215,18 @@ build_ish() {
     fi
 
     # iSH's ARM64 VDSO build hardcodes -fuse-ld=lld. On recent GitHub macOS
-    # runners, clang may reject that linker name unless an absolute ld.lld path
-    # is provided.
-    for lld_candidate in "/opt/homebrew/opt/llvm/bin/ld.lld" "/usr/local/opt/llvm/bin/ld.lld" "/opt/local/bin/ld.lld"; do
+    # runners, clang may reject that linker name. Use --ld-path with a concrete
+    # lld executable to keep the VDSO linker deterministic.
+    for lld_candidate in \
+        "/opt/homebrew/opt/llvm/bin/ld.lld" \
+        "/opt/homebrew/opt/llvm/bin/lld" \
+        "/opt/homebrew/opt/llvm/bin/ld64.lld" \
+        "/usr/local/opt/llvm/bin/ld.lld" \
+        "/usr/local/opt/llvm/bin/lld" \
+        "/usr/local/opt/llvm/bin/ld64.lld" \
+        "/opt/local/bin/ld.lld" \
+        "/opt/local/bin/lld" \
+        "/opt/local/bin/ld64.lld"; do
         if [ -x "$lld_candidate" ]; then
             LLD_PATH="$lld_candidate"
             break
@@ -225,8 +234,8 @@ build_ish() {
     done
 
     if [ -n "$LLD_PATH" ] && grep -q -- "-fuse-ld=lld" "$BUILD_DIR/build.ninja"; then
-        log_info "Patching VDSO linker flag to use $LLD_PATH"
-        sed -i.bak "s|-fuse-ld=lld|-fuse-ld=$LLD_PATH|g" "$BUILD_DIR/build.ninja"
+        log_info "Patching VDSO linker flags to use --ld-path=$LLD_PATH"
+        sed -i.bak "s|-fuse-ld=lld|--ld-path=$LLD_PATH|g" "$BUILD_DIR/build.ninja"
         rm -f "$BUILD_DIR/build.ninja.bak"
     fi
 
