@@ -187,6 +187,7 @@ build_ish() {
 
     BUILD_DIR="$ISH_DIR/build-ios"
     CROSS_FILE="$BUILD_DIR/ios-cross.txt"
+    LLD_PATH=""
 
     cd "$ISH_DIR"
 
@@ -211,6 +212,22 @@ build_ish() {
     else
         log_info "Meson already configured, reconfiguring..."
         meson configure "$BUILD_DIR" --buildtype="$MESON_BUILDTYPE"
+    fi
+
+    # iSH's ARM64 VDSO build hardcodes -fuse-ld=lld. On recent GitHub macOS
+    # runners, clang may reject that linker name unless an absolute ld.lld path
+    # is provided.
+    for lld_candidate in "/opt/homebrew/opt/llvm/bin/ld.lld" "/usr/local/opt/llvm/bin/ld.lld" "/opt/local/bin/ld.lld"; do
+        if [ -x "$lld_candidate" ]; then
+            LLD_PATH="$lld_candidate"
+            break
+        fi
+    done
+
+    if [ -n "$LLD_PATH" ] && grep -q -- "-fuse-ld=lld" "$BUILD_DIR/build.ninja"; then
+        log_info "Patching VDSO linker flag to use $LLD_PATH"
+        sed -i.bak "s|-fuse-ld=lld|-fuse-ld=$LLD_PATH|g" "$BUILD_DIR/build.ninja"
+        rm -f "$BUILD_DIR/build.ninja.bak"
     fi
 
     # Build libraries
